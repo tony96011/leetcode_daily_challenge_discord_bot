@@ -1,11 +1,13 @@
 import discord
-from discord.ext import commands
+from discord.ext import commands, tasks
 import requests
 import time
 from datetime import datetime, timedelta, timezone
 import json
+import pytz
 
 bot = commands.Bot(command_prefix='.', intents=discord.Intents.all())
+taipei_tz = pytz.timezone('Asia/Taipei')
 
 BASE_URL = "https://alfa-leetcode-api.onrender.com"
 
@@ -88,15 +90,25 @@ def main(usernames, channel):
                     return f"{username} finished daily challenge"
             if (not flag):
                 return f"{username} not yet finish"
+        
 
 @bot.event
 async def on_ready():
     print(f'Logged in as {bot.user.name}')
-    usernames = ["Your_leetcode_ID"]
+    check_daily_challenge.start()
+
+async def on_message(message):
+    if message.author == bot.user:
+        return
+    if message.content == "hello":
+        await message.channel.send("Hello!")
+
+@tasks.loop(time=time(hour=9, tzinfo=taipei_tz))
+async def check_daily_challenge():
+    usernames = ["Your_user_name"]
     channel = bot.get_channel("Your_channel_ID")
     string = main(usernames, channel)
     await channel.send(string)
-
 
 with open('token.txt', 'r') as file:
     token = file.read()
