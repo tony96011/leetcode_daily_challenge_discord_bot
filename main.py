@@ -92,8 +92,8 @@ def main(usernames, channel):
 @bot.event
 async def on_ready():
     print(f'Logged in as {bot.user.name}')
-    usernames = ["fffchameleon"]
-    channel = bot.get_channel(1193503070605299783)
+    usernames = ["Your_leetcode_ID"]
+    channel = bot.get_channel("Your_channel_ID")
     string = main(usernames, channel)
     await channel.send(string)
 
