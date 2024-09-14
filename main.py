@@ -1,116 +1,175 @@
 import discord
 from discord.ext import commands, tasks
-import requests
-import time
-from datetime import datetime, timedelta, timezone
+import os
+from dotenv import load_dotenv
 import json
 import pytz
+from datetime import datetime, time
+from leetcode_fn import get_user_daily_status, extract_daily_problem_info, get_daily_problem
 
-bot = commands.Bot(command_prefix='.', intents=discord.Intents.all())
+load_dotenv()
+TOKEN = os.getenv("BOT_TOKEN")
+CHANNEL_ID = int(os.getenv("CHANNEL_ID"))
+
 taipei_tz = pytz.timezone('Asia/Taipei')
+utc_tz = pytz.timezone('US/Pacific')
 
-BASE_URL = "https://alfa-leetcode-api.onrender.com"
-
-def get_recent_24h_ac_submissions(submission_list):
-    current_utc_time = datetime.now(timezone.utc)
-    midnight_utc = current_utc_time.replace(hour=0, minute=0, second=0, microsecond=0)
-    one_day_ago = midnight_utc - timedelta(days=1)
-
-    recent_submissions = []
-    for submission in submission_list:
-        submission_time = int(submission.get('timestamp', 0))
-        submission_time_utc = datetime.utcfromtimestamp(submission_time).replace(tzinfo=timezone.utc)
+class LeetCodeBot(commands.Bot):
+    def __init__(self):
+        intents = discord.Intents.default()
+        intents.message_content = True
+        super().__init__(command_prefix='/', intents=intents)
         
-        if one_day_ago <= submission_time_utc <= current_utc_time:
-            recent_submissions.append({
-                'title': submission.get('title'),
-                'statusDisplay': submission.get('statusDisplay'),
-                'timestamp': submission_time_utc.strftime('%Y-%m-%d %H:%M:%S')
-            })
-    return recent_submissions
+        self.user_data_file = 'user_data.json'
 
-def extract_daily_problem_info(daily_problem):
-    problem_info = {
-        "questionLink": daily_problem["questionLink"],
-        "date": daily_problem["date"],
-        "questionTitle": daily_problem["questionTitle"],
-        "difficulty": daily_problem["difficulty"],
-    }
-    return problem_info
+    async def setup_hook(self):
+        self.check_daily_challenge_scheduled_tasks.start()
 
-def get_profile(username):
-    url = f"{BASE_URL}/{username}"
-    response = requests.get(url)
-    if response.status_code == 200:
-        return response.json()
-    else:
-        print(f"Failed to get profile for {username}: {response.status_code}")
-        return None
+    def load_user_data(self):
+        if not os.path.exists(self.user_data_file):
+            return {}
+        with open(self.user_data_file, 'r') as file:
+            try:
+                return json.load(file)
+            except json.JSONDecodeError:
+                return {}
 
-def get_accepted_submissions(username):
-    url = f"{BASE_URL}/{username}/acSubmission"
-    response = requests.get(url)
-    if response.status_code == 200:
-        return response.json()
-    else:
-        print(f"Failed to get accepted submissions for {username}: {response.status_code}")
-        return None
+    def save_user_data(self, data):
+        with open(self.user_data_file, 'w') as file:
+            json.dump(data, file, indent=4)
 
-def get_daily_problem():
-    url = f"{BASE_URL}/daily"
-    response = requests.get(url)
-    if response.status_code == 200:
-        return response.json()
-    else:
-        print(f"Failed to get daily problem: {response.status_code}")
-        return None
+    @commands.command(name='add_user')
+    async def add_user(self, ctx, *usernames: str):
+        user_data = self.load_user_data()
+        added_users = []
+        existing_users = []
 
-def main(usernames, channel):
-    daily_problem = get_daily_problem()
-    if daily_problem:
-        problem_info = extract_daily_problem_info(daily_problem)
-        print(problem_info)
-    else:
-        print("No daily problem data available.")
-        
-    for username in usernames:
-        profile = get_profile(username)
-        if profile:
-            print(f"Profile for {username}: {json.dumps(profile, indent=4)}")
-        
-            submissions = get_accepted_submissions(username)
-            submission_list = submissions.get('submission', [])
-        
-            recent_ac_submissions = get_recent_24h_ac_submissions(submission_list)
-            print(f"Recent 24-hour submissions for {username}: {recent_ac_submissions}")
-            flag = False
-            for ac_submission in recent_ac_submissions:
-                if(ac_submission['title'] == problem_info['questionTitle']):
-                    flag = True
-                    return f"{username} finished daily challenge"
-            if (not flag):
-                return f"{username} not yet finish"
-        
+        for username in usernames:
+            if username in user_data:
+                existing_users.append(username)
+            else:
+                user_data[username] = {'daily_completed': False}
+                added_users.append(username)
+        self.save_user_data(user_data)
 
-@bot.event
-async def on_ready():
-    print(f'Logged in as {bot.user.name}')
-    check_daily_challenge.start()
+        if added_users:
+            await ctx.send(f'Users added: {", ".join(added_users)}.')
+        if existing_users:
+            await ctx.send(f'Users already exist: {", ".join(existing_users)}.')
 
-async def on_message(message):
-    if message.author == bot.user:
-        return
-    if message.content == "hello":
-        await message.channel.send("Hello!")
+    @commands.command(name='delete_user')
+    async def delete_user(self, ctx, *usernames: str):
+        user_data = self.load_user_data()
+        deleted_users = []
+        non_existent_users = []
 
-@tasks.loop(time=time(hour=9, tzinfo=taipei_tz))
-async def check_daily_challenge():
-    usernames = ["Your_user_name"]
-    channel = bot.get_channel("Your_channel_ID")
-    string = main(usernames, channel)
-    await channel.send(string)
+        for username in usernames:
+            if username in user_data:
+                del user_data[username]
+                deleted_users.append(username)
+            else:
+                non_existent_users.append(username)
 
-with open('token.txt', 'r') as file:
-    token = file.read()
-    
-bot.run(token)
+        self.save_user_data(user_data)
+
+        if deleted_users:
+            await ctx.send(f'Users deleted: {", ".join(deleted_users)}.')
+        if non_existent_users:
+            await ctx.send(f'Users not found: {", ".join(non_existent_users)}.')
+
+    @commands.command(name='usage')
+    async def usage_print(self, ctx):
+        usage_message = """
+**LeetCode Daily Checker Bot Usage**
+>
+> This message is generated by OPENAI - GPT o1-preview
+>
+
+Here are the commands you can use with this bot:
+
+- **`/add_user <username1> <username2> ...`**
+  - Add one or more LeetCode usernames to the tracking list. The bot will monitor these users for daily challenge completion.
+- **`/delete_user <username1> <username2> ...`**
+  - Remove one or more LeetCode usernames from the tracking list.
+- **`/check`**
+  - Manually trigger the bot to check the daily challenge status of all tracked users and display the results.
+- **`/usage`**
+  - Display this help message with information about all available commands.
+
+**Scheduled Checks**
+- The bot automatically checks the daily challenge status of all tracked users at **11:50 PM Pacific Time (UTC-8)** every day and posts the results in this channel.
+
+**Notes**
+- Ensure you provide the correct LeetCode usernames when adding users.
+"""
+        await ctx.send(usage_message)
+
+    @commands.command(name='check')
+    async def check_daily_challenge(self, ctx):
+        user_data = self.load_user_data()
+        daily_problem = get_daily_problem()
+
+        if not daily_problem:
+            await ctx.send("No daily problem data available.")
+            return
+
+        daily_problem_info = extract_daily_problem_info(daily_problem)
+        print(f"Daily problem info: {daily_problem_info}")
+
+        finish_daily = []
+        unfinish_daily = []
+        await ctx.send(f"Daily problem: {daily_problem_info['questionTitle']} - Difficulty: {daily_problem_info['difficulty']}")
+        print("Finished sending problem info")
+
+        for username in user_data.keys():
+            user_data[username]['daily_completed'] = get_user_daily_status(username, daily_problem_info)
+            if user_data[username]['daily_completed']:
+                finish_daily.append(username)
+            else:
+                unfinish_daily.append(username)
+
+        await ctx.send(f'Users who finished the daily challenge: {", ".join(finish_daily)}.')
+        await ctx.send(f'Users who have not finished the daily challenge: {", ".join(unfinish_daily)}.')
+
+        self.save_user_data(user_data)
+
+    @tasks.loop(time=time(hour=23, minute=55, tzinfo=utc_tz))
+    async def check_daily_challenge_scheduled_tasks(self):
+        user_data = self.load_user_data()
+        daily_problem = get_daily_problem()
+        if not daily_problem:
+            print("No daily problem data available.")
+            return
+
+        daily_problem_info = extract_daily_problem_info(daily_problem)
+        print(f"Daily problem info: {daily_problem_info}")
+
+        channel = self.get_channel(CHANNEL_ID)
+        finish_daily = []
+        unfinish_daily = []
+        if channel:
+            await channel.send(f"{daily_problem_info['date']}\nDaily problem: {daily_problem_info['questionTitle']} - Difficulty: {daily_problem_info['difficulty']}")
+            print("Finished sending problem info")
+
+            for username in user_data.keys():
+                user_data[username]['daily_completed'] = get_user_daily_status(username, daily_problem_info)
+                if user_data[username]['daily_completed']:
+                    finish_daily.append(username)
+                else:
+                    unfinish_daily.append(username)
+
+            await channel.send(f'Users who finished the daily challenge: {", ".join(finish_daily)}\nUsers who have not finished the daily challenge: {", ".join(unfinish_daily)}')
+
+        self.save_user_data(user_data)
+
+    @check_daily_challenge_scheduled_tasks.before_loop
+    async def before_check_daily_challenge_scheduled_tasks(self):
+        await self.wait_until_ready()
+        print("Starting the scheduled daily challenge check.")
+
+    async def on_ready(self):
+        print(f'{self.user.name} is online and ready!')
+
+if __name__ == "__main__":
+    leetcode_bot = LeetCodeBot()
+    leetcode_bot.run(TOKEN)
