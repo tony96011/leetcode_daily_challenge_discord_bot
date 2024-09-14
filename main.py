@@ -4,32 +4,31 @@ import os
 from dotenv import load_dotenv
 import json
 import pytz
-from datetime import datetime, time
+from zoneinfo import ZoneInfo
+from datetime import datetime, time, timezone
 from leetcode_fn import get_user_daily_status, extract_daily_problem_info, get_daily_problem
 
 load_dotenv()
 TOKEN = os.getenv("BOT_TOKEN")
 CHANNEL_ID = int(os.getenv("CHANNEL_ID"))
 
-taipei_tz = pytz.timezone('Asia/Taipei')
-utc_tz = pytz.timezone('US/Pacific')
+taipei_tz = ZoneInfo('Asia/Taipei')
+# utc_tz = timezone.utc
 
 class LeetCodeBot(commands.Bot):
     def __init__(self):
         intents = discord.Intents.default()
         intents.message_content = True
         super().__init__(command_prefix='/', intents=intents)
-
+        
     async def setup_hook(self):
         await self.add_cog(LeetCodeCog(self))
+        self.get_cog('LeetCodeCog').check_daily_challenge_scheduled_tasks.start()
 
 class LeetCodeCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         self.user_data_file = 'user_data.json'
-        
-    async def setup_hook(self):
-        self.check_daily_challenge_scheduled_tasks.start()
 
     def load_user_data(self):
         if not os.path.exists(self.user_data_file):
@@ -150,7 +149,7 @@ Here are the commands you can use with this bot:
 
         self.save_user_data(user_data)
 
-    @tasks.loop(time=time(hour=23, minute=55, tzinfo=utc_tz))
+    @tasks.loop(time=time(hour=7, minute=55, tzinfo=taipei_tz))
     async def check_daily_challenge_scheduled_tasks(self):
         user_data = self.load_user_data()
         daily_problem = get_daily_problem()
@@ -161,12 +160,13 @@ Here are the commands you can use with this bot:
         daily_problem_info = extract_daily_problem_info(daily_problem)
         print(f"Daily problem info: {daily_problem_info}")
 
-        channel = self.get_channel(CHANNEL_ID)
+        channel = self.bot.get_channel(CHANNEL_ID)
         finish_daily = []
         unfinish_daily = []
+        msg = ""
         if channel:
-            await channel.send(f"{daily_problem_info['date']}\nDaily problem: {daily_problem_info['questionTitle']} - Difficulty: {daily_problem_info['difficulty']}")
-            print("Finished sending problem info")
+            msg += (f"{daily_problem_info['date']}\nDaily problem: [{daily_problem_info['questionTitle']}]({daily_problem_info['questionLink']}) - Difficulty: {daily_problem_info['difficulty']}\n")
+            print(msg)
 
             for username in user_data.keys():
                 user_data[username]['daily_completed'] = get_user_daily_status(username, daily_problem_info)
@@ -175,17 +175,20 @@ Here are the commands you can use with this bot:
                 else:
                     unfinish_daily.append(username)
 
-            await channel.send(f'Users who finished the daily challenge: {", ".join(finish_daily)}\nUsers who have not finished the daily challenge: {", ".join(unfinish_daily)}')
+            msg += (f'Users who finished the daily challenge: {", ".join(finish_daily)}\nUsers who have not finished the daily challenge: {", ".join(unfinish_daily)}')
+            await channel.send(msg)
+            # await channel.send(f'Users who finished the daily challenge: {", ".join(finish_daily)}\nUsers who have not finished the daily challenge: {", ".join(unfinish_daily)}')
 
         self.save_user_data(user_data)
 
     @check_daily_challenge_scheduled_tasks.before_loop
     async def before_check_daily_challenge_scheduled_tasks(self):
-        await self.wait_until_ready()
+        await self.bot.wait_until_ready()
         print("Starting the scheduled daily challenge check.")
 
+    @commands.Cog.listener()
     async def on_ready(self):
-        print(f'{self.user.name} is online and ready!')
+        print(f'{self.bot.user.name} is online and ready!')
 
 if __name__ == "__main__":
     leetcode_bot = LeetCodeBot()
