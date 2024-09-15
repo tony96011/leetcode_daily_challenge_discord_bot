@@ -85,11 +85,11 @@ def get_user_daily_status(username, problem_info):
         logging.info(f"Recent 24-hour submissions for {username}: {recent_ac_submissions}")
         flag = False
         for ac_submission in recent_ac_submissions:
-            if(ac_submission['title'] == problem_info['questionTitle']):
+            if ac_submission['title'] == problem_info['questionTitle']:
                 flag = True
                 logging.info(f"{username} finished the daily challenge.")
                 return True
-        if (flag == False):
+        if flag == False:
             logging.info(f"{username} has not finished the daily challenge.")
             return False
 
